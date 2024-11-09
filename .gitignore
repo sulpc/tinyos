@@ -1,0 +1,14 @@
+### ignore all
+*
+
+### include
+!/code/
+!/code/**
+!/.gitignore
+!/*.uvprojx
+
+# keil prj
+!/README.md
+
+### ignore
+.vscode/

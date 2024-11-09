@@ -1,0 +1,212 @@
+/**
+ * @file tos_cpu_s.850
+ * @brief cpu dependency functions in asm
+ * @note irq control, task switch, ...
+ */
+
+// external references
+    .extern _tos_task_prio_current
+    .extern _tos_task_prio_switch_to
+    .extern _tos_task_switch_to
+    .extern _tos_task_current
+    .extern _tos_time_tick
+    .extern _tos_exit_isr
+    .extern _tos_enter_isr
+
+
+// functions declared in this file
+    .public _tos_task_switch_first
+    .public _tos_task_switch
+    .public _tos_task_switch_intr
+    .public _tos_irq_diable
+    .public _tos_irq_enable
+    .public _tos_irq_restore
+    .public _tos_systick_isr
+
+
+// system registers
+    EIPC   .set  0
+    EIPSW  .set  1
+    PSW    .set  5
+    EIIC   .set  13
+    CTPC   .set  16
+    CTPSW  .set  17
+
+
+// code begin
+    .text
+    .align  4
+
+
+_tos_irq_diable:
+    di
+    jmp     [lp]
+
+
+_tos_irq_enable:
+    ei
+    jmp     [lp]
+
+
+_tos_irq_restore:
+    ei
+    jmp     [lp]
+
+
+_tos_task_switch:
+    // task_switch, caused by sleep/yeild/wait...
+    // store_cpu_context to stack
+    pushsp  r1-r2
+    pushsp  r4-r31
+
+    pushsp  r31                     // LP, save for task's EIPC, for fake ISR
+
+    stsr    PSW,  r19               // Save task's EIPSW, for fake ISR
+    pushsp  r19
+
+    stsr    CTPC, r19
+    pushsp  r19
+
+    stsr    CTPSW, r19
+    pushsp  r19
+    // store_cpu_context end
+
+    // store SP to tcb, _tos_task_current->task_stk_ptr = SP
+    mov     _tos_task_current       , r18
+    ld.w    0[r18]                  , r18
+    st.w    sp                      , 0[r18]
+
+
+_tos_task_switch_first:
+    // tos_task_prio_current = _tos_task_prio_switch_to
+    mov     _tos_task_prio_switch_to, r18
+    ld.b    0[r18]                  , r19
+    mov     _tos_task_prio_current  , r18
+    st.b    r19                     , 0[r18]
+
+    // tos_task_current = tos_task_switch_to
+    mov     _tos_task_switch_to     , r18
+    ld.w    0[r18]                  , r19
+    mov     _tos_task_current       , r18
+    st.w    r19                     , 0[r18]
+
+    // restore SP from tcb, SP = tos_task_switch_to->task_stk_ptr
+    ld.w    0[r19], sp
+
+    // restore_cpu_context from stack
+    popsp   r19
+    ldsr    r19, CTPSW
+
+    popsp   r19
+    ldsr    r19, CTPC
+
+    popsp   r19
+    ldsr    r19, EIPSW
+
+    popsp   r19
+    ldsr    r19, EIPC
+
+    popsp   r4-r31
+    popsp   r1-r2
+    // restore_cpu_context end
+
+    eiret
+
+
+_tos_systick_isr:
+    di
+    // store_cpu_context to stack
+    pushsp  r1-r2
+    pushsp  r4-r31
+
+    stsr    EIPC    , r19       // when EI, address of next instruction is saved to EIPC
+    pushsp  r19
+
+    stsr    EIPSW   , r19       // When EI, current PSW setting is saved to EIPSW. PSW, program status word, flags
+    pushsp  r19
+
+    stsr    CTPC    , r19       // when CALLT, address of next instruction is saved to CTPC
+    pushsp  r19
+
+    stsr    CTPSW   , r19       // When CALLT, some current PSW setting is saved to CTPSW
+    pushsp  r19
+    // store_cpu_context end
+
+    // store SP to tcb, _tos_task_current->task_stk_ptr = SP
+    mov     _tos_task_current   , r18
+    ld.w    0[r18]              , r18
+    st.w    sp                  , 0[r18]
+
+    ei
+
+    jarl    _tos_enter_isr , lp
+    jarl    _tos_time_tick , lp
+    jarl    _tos_exit_isr  , lp            // may call _tos_task_switch_intr
+
+    di
+
+    // restore SP from tcb, SP = tos_task_current->task_stk_ptr
+    mov     _tos_task_current   , r18
+    ld.w    0[r18]              , r18
+    ld.w    0[r18]              , sp
+
+    // restore_cpu_context from stack
+    popsp   r19
+    ldsr    r19, CTPSW
+
+    popsp   r19
+    ldsr    r19, CTPC
+
+    popsp   r19
+    ldsr    r19, EIPSW
+
+    popsp   r19
+    ldsr    r19, EIPC
+
+    popsp   r4-r31
+    popsp   r1-r2
+    // restore_cpu_context end
+
+    ei
+
+    eiret
+
+
+_tos_task_switch_intr:
+    // called by _tos_exit_isr,  cpu context has stored in stack
+
+    // tos_task_prio_current = tos_task_prio_switch_to;
+    mov     _tos_task_prio_switch_to  , r18
+    ld.b    0[r18]                    , r19
+    mov     _tos_task_prio_current    , r18
+    st.b    r19                       , 0[r18]
+
+    // tos_task_current = tos_task_switch_to
+    mov     _tos_task_switch_to       , r18
+    ld.w    0[r18]                    , r19
+    mov     _tos_task_current         , r18
+    st.w    r19                       , 0[r18]
+
+    // restore SP from tcb, SP = tos_task_current->task_stk_ptr
+    mov     _tos_task_current   , r18
+    ld.w    0[r18]              , r18
+    ld.w    0[r18]              , sp
+
+    // restore_cpu_context from stack
+    popsp   r19
+    ldsr    r19, CTPSW
+
+    popsp   r19
+    ldsr    r19, CTPC
+
+    popsp   r19
+    ldsr    r19, EIPSW
+
+    popsp   r19
+    ldsr    r19, EIPC
+
+    popsp   r4-r31
+    popsp   r1-r2
+    // restore_cpu_context end
+
+    eiret                       // return from isr to new task code
